@@ -5,19 +5,18 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.client.model.ModelLoader;
 import net.minecraftforge.client.model.obj.OBJLoader;
 import net.minecraftforge.fml.client.registry.RenderingRegistry;
-import nl.makertim.bikemod.BikeEntity;
-import nl.makertim.bikemod.BikeRender;
-import nl.makertim.bikemod.Bikes;
-import nl.makertim.bikemod.ModInfo;
+import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
+import nl.makertim.bikemod.*;
 
 public class ClientProxy extends CommonProxy {
 
 	@Override
-	public void preInit() {
-		super.preInit();
+	public void preInit(FMLPreInitializationEvent event) {
+		super.preInit(event);
 		OBJLoader.INSTANCE.addDomain(ModInfo.MOD_ID);
 		ModelLoader.setCustomModelResourceLocation(Bikes.item, 0,
 			new ModelResourceLocation(new ResourceLocation(ModInfo.MOD_ID, "bike"), "inventory"));
+		new ClientBikeHandler();
 	}
 
 	@Override

@@ -1,11 +1,9 @@
 package nl.makertim.bikemod;
 
-import java.lang.reflect.Field;
 import java.util.List;
 
 import javax.annotation.Nullable;
 
-import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.item.EntityBoat;
@@ -17,33 +15,25 @@ import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.datasync.DataParameter;
 import net.minecraft.network.datasync.DataSerializers;
 import net.minecraft.network.datasync.EntityDataManager;
+import net.minecraft.network.play.client.CPacketSteerBoat;
+import net.minecraft.network.play.client.CPacketVehicleMove;
 import net.minecraft.util.*;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.fml.common.FMLLog;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.InputEvent;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
 public class BikeEntity extends Entity {
 
 	private static final DataParameter<Integer> TIME_SINCE_HIT = EntityDataManager.createKey(EntityBoat.class,
-			DataSerializers.VARINT);
+		DataSerializers.VARINT);
 	private static final DataParameter<Integer> FORWARD_DIRECTION = EntityDataManager.createKey(EntityBoat.class,
-			DataSerializers.VARINT);
+		DataSerializers.VARINT);
 	private static final DataParameter<Float> DAMAGE_TAKEN = EntityDataManager.createKey(EntityBoat.class,
 		DataSerializers.FLOAT);
 
-	private int lerpSteps;
-	private double boatPitch;
-	private double lerpY;
-	private double lerpZ;
-	private double boatYaw;
-	private double lerpXRot;
 	private float prefMotion;
 	private boolean forwardInputDown;
 	private boolean backInputDown;
@@ -52,7 +42,6 @@ public class BikeEntity extends Entity {
 		super(worldIn);
 		this.preventEntitySpawning = true;
 		this.setSize(1, 1);
-		MinecraftForge.EVENT_BUS.register(this);
 	}
 
 	public BikeEntity(World worldIn, double x, double y, double z) {
@@ -146,8 +135,10 @@ public class BikeEntity extends Entity {
 	 * Applies a velocity to the entities, to push them away from eachother.
 	 */
 	public void applyEntityCollision(Entity entityIn) {
-		if (entityIn instanceof EntityBoat) {
-			if (entityIn.getEntityBoundingBox().minY < this.getEntityBoundingBox().maxY) {
+		if (entityIn instanceof BikeEntity) {
+			if (prefMotion > 1) {
+				this.setDead();
+			} else if (entityIn.getEntityBoundingBox().minY < this.getEntityBoundingBox().maxY) {
 				super.applyEntityCollision(entityIn);
 			}
 		} else if (entityIn.getEntityBoundingBox().minY <= this.getEntityBoundingBox().minY) {
@@ -162,6 +153,7 @@ public class BikeEntity extends Entity {
 	@SideOnly(Side.CLIENT)
 	public void performHurtAnimation() {
 		this.setForwardDirection(-this.getForwardDirection());
+		this.rotationYaw += (Math.random() * 10) - 5;
 		this.setTimeSinceHit(10);
 		this.setDamageTaken(this.getDamageTaken() * 11.0F);
 	}
@@ -174,19 +166,6 @@ public class BikeEntity extends Entity {
 		return !this.isDead;
 	}
 
-	/**
-	 * Set the position and rotation values directly without any clamping.
-	 */
-	@SideOnly(Side.CLIENT)
-	public void setPositionAndRotationDirect(double x, double y, double z, float yaw, float pitch, int posRotationIncrements, boolean teleport) {
-		this.boatPitch = x;
-		this.lerpY = y;
-		this.lerpZ = z;
-		this.boatYaw = (double) yaw;
-		this.lerpXRot = (double) pitch;
-		this.lerpSteps = 10;
-	}
-
 	/*
 	 * Gets the horizontal facing direction of this Entity, adjusted to take
 	 * specially-treated entity types into account.
@@ -196,8 +175,6 @@ public class BikeEntity extends Entity {
 		return this.getHorizontalFacing().rotateY();
 	}
 
-	
-	
 	/**
 	 * Called to update the entity's position/logic.
 	 */
@@ -214,26 +191,18 @@ public class BikeEntity extends Entity {
 		this.prevPosY = this.posY;
 		this.prevPosZ = this.posZ;
 		super.onUpdate();
-		this.tickLerp();
 
-		if (this.canPassengerSteer()) {
-			this.updateMotion();
-
-			if (this.worldObj.isRemote) {
-				this.controlBoat();
-			}
-
-			this.moveEntity(this.motionX, this.motionY, this.motionZ);
-		} else {
-			this.motionX = 0.0D;
-			this.motionY = 0.0D;
-			this.motionZ = 0.0D;
+		this.updateMotion();
+		if (this.worldObj.isRemote) {
+			this.controlBoat();
+			this.worldObj.sendPacketToServer(new CPacketVehicleMove(this));
 		}
+
+		this.moveEntity(this.motionX, this.motionY, this.motionZ);
 
 		this.doBlockCollisions();
 		List<Entity> list = this.worldObj.getEntitiesInAABBexcluding(this,
-				this.getEntityBoundingBox().expand(0.20000000298023224D, -0.009999999776482582D, 0.20000000298023224D),
-				EntitySelectors.getTeamCollisionPredicate(this));
+			this.getEntityBoundingBox().expand(0.2D, -0.01D, 0.2D), EntitySelectors.getTeamCollisionPredicate(this));
 
 		if (!list.isEmpty()) {
 			boolean flag = !this.worldObj.isRemote && !(this.getControllingPassenger() instanceof EntityPlayer);
@@ -252,71 +221,74 @@ public class BikeEntity extends Entity {
 		}
 	}
 
-	private void tickLerp() {
-		if (this.lerpSteps > 0 && !this.canPassengerSteer()) {
-			double d0 = this.posX + (this.boatPitch - this.posX) / (double) this.lerpSteps;
-			double d1 = this.posY + (this.lerpY - this.posY) / (double) this.lerpSteps;
-			double d2 = this.posZ + (this.lerpZ - this.posZ) / (double) this.lerpSteps;
-			double d3 = MathHelper.wrapDegrees(this.boatYaw - (double) this.rotationYaw);
-			this.rotationYaw = (float) ((double) this.rotationYaw + d3 / (double) this.lerpSteps);
-			this.rotationPitch = (float) ((double) this.rotationPitch
-					+ (this.lerpXRot - (double) this.rotationPitch) / (double) this.lerpSteps);
-			--this.lerpSteps;
-			this.setPosition(d0, d1, d2);
-			this.setRotation(this.rotationYaw, this.rotationPitch);
-		}
-	}
-
 	/**
 	 * Update the boat's speed, based on momentum.
 	 */
 	private void updateMotion() {
 		double d1 = this.func_189652_ae() ? 0.0D : -0.04D;
 		/* How much of current speed to retain. Value zero to one. */
-		float momentum = 0.5F;
+		float momentum = 0.9F;
 		this.motionX *= (double) momentum;
 		this.motionZ *= (double) momentum;
 		this.motionY += d1;
 	}
 
 	private void controlBoat() {
+		float f = (float) Math.pow(prefMotion, 2) / 1.5F;
 		if (this.isBeingRidden()) {
-			float f = prefMotion / 5F;
-
 			if (this.forwardInputDown) {
-				f += 0.04F;
+				f += 0.075F;
 			}
-
 			if (this.backInputDown) {
-				f -= 0.005F;
+				f -= 0.075F;
 			}
 
 			if (!getPassengers().isEmpty()) {
 				Entity rider = getPassengers().get(0);
-				float riderYaw = rider.rotationYaw;
-				if (rotationYaw != riderYaw) {
+				float riderYaw = rider.rotationYaw % 360;
+				if (Math.round(rotationYaw) != Math.round(riderYaw)) {
+					// TODO: Fix als je roteerd = sliprem
+					// TODO: Fix draaien
+					// TODO: hoe groter bocht = meer remmen
+					updateMotion();
+					System.out.printf("%f != %f\n", rotationYaw, riderYaw);
 					float yawDiff = rotationYaw - riderYaw;
-					yawDiff = MathHelper.clamp_float(yawDiff, Math.min(-1F, -1F * f * 50), Math.max(1F, 1F * f * 50))
+					float max = 50;
+					yawDiff = MathHelper.clamp_float(yawDiff, Math.min(-1F, -1F * f * max), Math.max(1F, 1F * f * max))
 							* (Math.abs(yawDiff) / 12);
+					if (yawDiff > max && !(yawDiff > max - 360)) {
+						yawDiff = rotationYaw - riderYaw;
+					}
 					prevRotationYaw = rotationYaw;
 					rotationYaw -= yawDiff;
+					rotationYaw %= 360;
 				}
 			}
+			if (f < 0) {
+				f = 0;
+			}
 
-			this.motionX += (double) (MathHelper.sin(-this.rotationYaw * 0.017453292F) * f);
-			this.motionZ += (double) (MathHelper.cos(this.rotationYaw * 0.017453292F) * f);
+			this.motionX += (double) (MathHelper.sin(-this.rotationYaw * 0.0175F) * f);
+			this.motionZ += (double) (MathHelper.cos(this.rotationYaw * 0.0175F) * f);
 			this.prefMotion = f;
+		} else {
+			f /= 3;
 		}
+		if (f > 2.5F) {
+			f = 2.5F;
+		}
+		this.motionX += (double) (MathHelper.sin(-this.rotationYaw * 0.0175F) * f);
+		this.motionZ += (double) (MathHelper.cos(this.rotationYaw * 0.0175F) * f);
+		this.prefMotion = f;
 	}
 
 	public void updatePassenger(Entity passenger) {
 		if (this.isPassenger(passenger)) {
 			float f = 0.0F;
-			float f1 = (float) ((this.isDead ? 0.009999999776482582D : this.getMountedYOffset())
-					+ passenger.getYOffset());
+			float f1 = (float) ((this.isDead ? 0.001D : this.getMountedYOffset()) + passenger.getYOffset());
 
 			Vec3d vec3d = (new Vec3d((double) f, 0.0D, 0.0D))
-					.rotateYaw(-this.rotationYaw * 0.017453292F - ((float) Math.PI / 2F));
+					.rotateYaw(-this.rotationYaw * 0.0175F - ((float) Math.PI / 2F));
 			passenger.setPosition(this.posX + vec3d.xCoord, this.posY + (double) f1, this.posZ + vec3d.zCoord);
 			this.applyYawToEntity(passenger);
 
@@ -420,40 +392,11 @@ public class BikeEntity extends Entity {
 		return list.isEmpty() ? null : list.get(0);
 	}
 
-	@SubscribeEvent
-	@SuppressWarnings("unchecked")
-	@SideOnly(Side.CLIENT)
-	public void onKeyInput(InputEvent.KeyInputEvent event) {
-		if (this.worldObj.isRemote) {
-			return;
-		}
-		List<KeyBinding> keys;
-		try {
-			Field keysField = Class.forName("net.minecraft.client.settings.KeyBinding").getDeclaredFields()[0];
-			keysField.setAccessible(true);
-			keys = (List) keysField.get(null);
-			keysField.setAccessible(false);
-		} catch (Exception ex) {
-			FMLLog.getLogger().info(ex);
-			return;
-		}
-		boolean forward = false;
-		boolean backward = false;
-		for (KeyBinding key : keys) {
-			if (key.getKeyDescription().equals("key.forward")) {
-				forward = key.isKeyDown();
-			}
-			if (key.getKeyDescription().equals("key.back")) {
-				backward = key.isKeyDown();
-			}
-		}
-		FMLLog.getLogger().info(forward + "-" + backward);
-		updateInputs(forward, backward);
+	public void updateForward(boolean key) {
+		this.forwardInputDown = key;
 	}
 
-	@SideOnly(Side.CLIENT)
-	public void updateInputs(boolean up, boolean down) {
-		this.forwardInputDown = up;
-		this.backInputDown = down;
+	public void updateBrake(boolean key) {
+		this.backInputDown = key;
 	}
 }

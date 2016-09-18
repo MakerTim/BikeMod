@@ -1,8 +1,5 @@
 package nl.makertim.bikemod;
 
-import java.util.Arrays;
-import java.util.List;
-
 public class ModInfo {
 
 	public static final String MOD_ID = "bikemod";
